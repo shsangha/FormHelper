@@ -1,10 +1,10 @@
 /* Heavily inspired by Jared Palmer, and his talk about React forms at 
   React Alicante. Wanted to understand how Formik does field-level/form level validation,,
-  and how all of it works with dynamic/nested fields. Borrowed Jared's logic on how he attaches field validators, and 
-  took some inspiration from how he deals with nested form state. Other than that all the logic is mine, and 
-  I added some functionality (like composable event handlers, and the ability to clean up form state when dymamic fields are exited),
-  and took a different approach to handling complex async tasks by electing to use Rx, as just promises worked but was a little clunky for 
-  my liking
+  and how all of it works with dynamic/nested fields. Took the patterns that make Formik possible
+  and reimplemented them/tested them using my own logic to further my understanding. Also made some different 
+  design decisions including using Observables instead of just promises, having the ability to clear form state when 
+  a dynamic form field is removed, and adding greater flexibility to the event handlers by adding the ability to run
+  more than one function when an event is triggered. 
 
   **STILL WANT TO KNOW** : If there are other patterns that would reduce the number of re-renders
     without having to do deep object comparisons, because this method of dealing with forms is nice for 
@@ -12,9 +12,10 @@
 */
 import React, { Component } from 'react';
 import propTypes from 'prop-types';
-//import { setInternalValue, makeCancelable } from './utils';
 import setInternalValue from './utils/setInternalValue';
-import { Observable, merge } from 'rxjs';
+import retrieveInternalValue from './utils/retrieveInternalValue';
+import checkValidValidatorFunc from './utils/checkValidValidatorFunc';
+import { Observable, merge, of, zip, pipe } from 'rxjs';
 import {
   distinctUntilChanged,
   filter,
@@ -26,7 +27,7 @@ import {
   catchError
 } from 'rxjs/operators';
 
-const FormContext = React.createContext();
+export const FormContext = React.createContext();
 
 export default class FormHelper extends Component {
   static propTypes = {
@@ -34,7 +35,7 @@ export default class FormHelper extends Component {
     onSubmit: propTypes.func.isRequired,
     validateOnChange: propTypes.bool.isRequired,
     validateOnBlur: propTypes.bool.isRequired,
-    rootValidation: propTypes.func.isRequired
+    rootValidatior: propTypes.func.isRequired
   };
 
   static defaultProps = {
@@ -42,11 +43,10 @@ export default class FormHelper extends Component {
     onSubmit: () => {},
     validateOnChange: true,
     validateOnBlur: true,
-    rootValidation: () => {}
+    rootValidatior: () => {}
   };
 
   fieldValidators = {};
-  roorValiadatorActive = false;
   mounted = false;
 
   constructor(props) {
@@ -75,6 +75,21 @@ export default class FormHelper extends Component {
     );
   };
 
+  runAllFielLevelValidations = () => {
+    const validatorKeys = Object.keys(this.fieldValidators);
+
+    const promiseArray = validatorKeys.map((key, index) => {
+      return this.runFieldLevelValidation(key, retrieveInternalValue(this.state.values, key));
+    });
+
+    Promise.all(promiseArray).then(resolvedArray => {
+      return resolvedArray.reduce((accumulator, current, index) => {
+        // need the custom setin function here and should be able to do the whole thing in 2 passes instead of 4
+        return accumulator;
+      }, []);
+    });
+  };
+
   componentDidMount() {
     this.mounted = true;
 
@@ -92,24 +107,28 @@ export default class FormHelper extends Component {
     const validationActive$ = validation$.pipe(
       filter(({ name }) => this.fieldValidators[name].active === true),
       throttleTime(300),
-      switchMap(({ name, value }) => {
-        return this.runFieldLevelValidation(name, value);
-      })
+      switchMap(({ name, value }) => zip(this.runFieldLevelValidation(name, value), of(name)))
     );
 
     const validationNotActive$ = validation$.pipe(
       filter(({ name }) => this.fieldValidators[name].active !== true),
-      mergeMap(({ name, value }) => {
-        return this.runFieldLevelValidation(name, value);
-      })
+      tap(x => console.log('this dfa')),
+      mergeMap(({ name, value }) => zip(this.runFieldLevelValidation(name, value), of(name))),
+      filter(([value, name]) => this.fieldValidators[name].active !== true)
     );
 
-    const composed$ = merge(validationActive$, validationNotActive$).pipe(
-      tap(x => console.log('DFDSF', x)),
-      retry(3)
-    );
+    const composed$ = merge(validationActive$, validationNotActive$);
 
-    this.validationSubscription = composed$.subscribe(x => console.log(x), a => console.log(a));
+    this.validationSubscription = composed$.subscribe(
+      ([errors, name]) => {
+        console.log('PASSES');
+        this.setState(prevState => ({
+          ...prevState,
+          errors: setInternalValue(prevState.errors, name, errors)
+        }));
+      },
+      a => console.log(a)
+    );
   }
 
   componentWillUnmount() {
@@ -126,22 +145,37 @@ export default class FormHelper extends Component {
     delete this.fieldValidators[name];
   };
 
-  validateSingleField = name => {
-    if (this.fieldValidators[name].cancel) {
-      this.fieldValidators[name].cancel;
-    }
+  setTouched = event => {
+    const { name } = event.target;
+
+    this.setState(
+      prevState => ({
+        ...prevState,
+        touched: setInternalValue(prevState.touched, name, true)
+      }),
+      () => {
+        if (checkValidValidatorFunc.call(this, name) && this.props.validateOnBlur) {
+          this.triggerFieldLevelValidation(name, value);
+        }
+      }
+    );
   };
 
   handleChange = event => {
     const { name, value, type } = event.target;
-    //   console.log(name, type, value);
-    /*
-    this.setState(prevState => ({
-      ...prevState,
-      values: setInternalValue(prevState.values, name, value)
-    }));
-    */
-    this.triggerFieldLevelValidation(name, value);
+    console.log(name, type, value);
+
+    this.setState(
+      prevState => ({
+        ...prevState,
+        values: setInternalValue(prevState.values, name, value)
+      }),
+      () => {
+        if (checkValidValidatorFunc.call(this, name) && this.props.validateOnChange) {
+          this.triggerFieldLevelValidation(name, value);
+        }
+      }
+    );
   };
 
   getStateAndHelpers = () => {};
@@ -149,9 +183,13 @@ export default class FormHelper extends Component {
   render() {
     const { children } = this.props;
 
-    return children({
-      handleChange: this.handleChange,
-      attachFieldValidator: this.attachFieldValidator
-    });
+    return (
+      <FormContext.Provider value={{ a: 3 }}>
+        {children({
+          handleChange: this.handleChange,
+          attachFieldValidator: this.attachFieldValidator
+        })}
+      </FormContext.Provider>
+    );
   }
 }
