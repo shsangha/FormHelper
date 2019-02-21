@@ -4,6 +4,8 @@ import { toPath } from 'lodash';
 import isEmptyObj from './isEmptyObj';
 import isObj from './isObj';
 
+const isValidIndex = num => Number(num) % 1 === 0 && Number(num) >= 0;
+
 /* @input - {Array} - a 2d array containing an array of field names and the corresponding error object
    @ouput - {Object} a combined error object from all the fields
 
@@ -16,9 +18,12 @@ import isObj from './isObj';
 export default errors =>
   errors.reduce((combinedErrors, validatorResult) => {
     const [name, currentError] = validatorResult;
+    const pathArray = toPath(name);
     // ignore if there are no errors
-    if (isObj(currentError) && !isEmptyObj(currentError)) {
-      const pathArray = toPath(name);
+    if (
+      (isObj(currentError) && !isEmptyObj(currentError)) ||
+      isValidIndex(pathArray[pathArray.length - 1])
+    ) {
       const { target, index } = pathArray.reduce(
         (resVal, currentPath, currentIndex) => {
           if (currentIndex < pathArray.length - 1) {
@@ -26,8 +31,7 @@ export default errors =>
               resVal.target = resVal.target[currentPath];
             } else {
               const nextPath = pathArray[currentIndex + 1];
-              resVal.target = resVal.target[currentPath] =
-                Number(nextPath) % 1 === 0 && Number(nextPath) >= 0 ? [] : {};
+              resVal.target = resVal.target[currentPath] = isValidIndex(nextPath) ? [] : {};
             }
           }
           resVal.index = currentIndex;
