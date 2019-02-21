@@ -9,8 +9,18 @@ const shallowSetState = (object, name, value) => {
   return { ...object, [`${name}`]: value };
 };
 
+/* @input rootObject {Object} the root key of state we want to set value on
+   @input fieldName {String} the name of the field 
+   @input value {Any} the value we want to set
+   @output {Object} the mutated object that we want to pass into setState
+
+   Basically if field is a topLevel field we setState as per usual.
+   If there is a nested form value setState wont be enough because it is shallow
+   so we deepCopy the state (as not to mutate state) and then mutate the copy and 
+   return what we want the new state to look like. 
+*/
 export default (rootObject, fieldName, value) => {
-  if (rootObject[fieldName]) {
+  if (rootObject[fieldName] !== undefined) {
     return shallowSetState(rootObject, fieldName, value);
   }
   // need to do this so we don't actually mutate the state object
