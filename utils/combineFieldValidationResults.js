@@ -15,11 +15,12 @@ const isValidIndex = num => Number(num) % 1 === 0 && Number(num) >= 0;
    it's fine becasue we contain the side-effect within the function so we aren't mutating any values
    that exist outide the scope of this function so it is still visibiy pure.
 */
-export default errors =>
-  errors.reduce((combinedErrors, validatorResult) => {
-    const [name, currentError] = validatorResult;
+export default (validatorKeys, errors) =>
+  errors.reduce((combinedErrors, currentError, idx) => {
+    const name = validatorKeys[idx];
+
     const pathArray = toPath(name);
-    // ignore if there are no errors
+    // ignore if there are no errors/ pass through empty array errors to preserve order
     if (
       (isObj(currentError) && !isEmptyObj(currentError)) ||
       isValidIndex(pathArray[pathArray.length - 1])

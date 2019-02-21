@@ -14,7 +14,11 @@ import React, { Component } from 'react';
 import propTypes from 'prop-types';
 import setInternalValue from './utils/setInternalValue';
 import retrieveInternalValue from './utils/retrieveInternalValue';
+import { toPath } from 'lodash';
+import isObj from './utils/isObj';
+import isEmptyObj from './utils/isEmptyObj';
 import checkValidValidatorFunc from './utils/checkValidValidatorFunc';
+import combineFielValidationResults from './utils/combineFieldValidationResults';
 import { Observable, merge, of, zip, pipe } from 'rxjs';
 import {
   distinctUntilChanged,
@@ -82,12 +86,9 @@ export default class FormHelper extends Component {
       return this.runFieldLevelValidation(key, retrieveInternalValue(this.state.values, key));
     });
 
-    Promise.all(promiseArray).then(resolvedArray => {
-      return resolvedArray.reduce((accumulator, current, index) => {
-        // need the custom setin function here and should be able to do the whole thing in 2 passes instead of 4
-        return accumulator;
-      }, []);
-    });
+    Promise.all(promiseArray)
+      .then(errorsArray => combineFielValidationResults(validatorKeys, errorsArray))
+      .then(c => console.log(c));
   };
 
   componentDidMount() {
@@ -112,7 +113,6 @@ export default class FormHelper extends Component {
 
     const validationNotActive$ = validation$.pipe(
       filter(({ name }) => this.fieldValidators[name].active !== true),
-      tap(x => console.log('this dfa')),
       mergeMap(({ name, value }) => zip(this.runFieldLevelValidation(name, value), of(name))),
       filter(([value, name]) => this.fieldValidators[name].active !== true)
     );
@@ -121,7 +121,6 @@ export default class FormHelper extends Component {
 
     this.validationSubscription = composed$.subscribe(
       ([errors, name]) => {
-        console.log('PASSES');
         this.setState(prevState => ({
           ...prevState,
           errors: setInternalValue(prevState.errors, name, errors)
@@ -164,7 +163,6 @@ export default class FormHelper extends Component {
   handleChange = event => {
     const { name, value, type } = event.target;
     console.log(name, type, value);
-
     this.setState(
       prevState => ({
         ...prevState,
@@ -186,7 +184,7 @@ export default class FormHelper extends Component {
     return (
       <FormContext.Provider value={{ a: 3 }}>
         {children({
-          handleChange: this.handleChange,
+          handleChange: this.runAllFielLevelValidations,
           attachFieldValidator: this.attachFieldValidator
         })}
       </FormContext.Provider>
