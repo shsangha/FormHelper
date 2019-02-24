@@ -15,7 +15,7 @@ import propTypes from 'prop-types';
 import setInternalValue from './utils/setInternalValue';
 import retrieveInternalValue from './utils/retrieveInternalValue';
 import { toPath, merge as deepmerge } from 'lodash';
-import { Observable, merge, of, zip, pipe, iif } from 'rxjs';
+import { Observable, merge, of, zip, pipe, iif, forkJoin } from 'rxjs';
 import {
   distinctUntilChanged,
   filter,
@@ -33,7 +33,8 @@ import {
   flatMap,
   partition,
   combineLatest,
-  take
+  take,
+  share
 } from 'rxjs/operators';
 import isObj from './utils/isObj';
 import isEmptyObj from './utils/isEmptyObj';
@@ -90,42 +91,23 @@ export default class FormHelper extends Component {
       )
     );
 */
-    const a$ = Observable.create(observer => {
+    const validation$ = Observable.create(observer => {
       this.triggerFieldLevelValidation = (name, value) => {
         observer.next({ name, value });
       };
     }).pipe(
       startWith({ name: null }),
       pairwise(),
-      tap(x => console.log(x))
+      share()
     );
 
-    const b$ = a$.pipe(
-      flatMap(([prev, current]) =>
-        iif(
-          () => {
-            console.log(prev, current);
-            return prev.name === current.name;
-          },
-          a$.pipe(
-            tap(() => console.log('first')),
-            throttleTime(300),
-            switchMap(([_, { name, value }]) => this.runFieldLevelValidation(name, value), take(1))
-          ),
-          a$.pipe(
-            tap(() => console.log('bottom')),
-            flatMap(([_, { name, value }]) => this.runFieldLevelValidation(name, value))
-          )
-        )
-      )
+    const result = merge(
+      validation$.pipe(filter(([prev, current]) => prev.name === current.name)),
+      validation$.pipe(filter(([prev, current]) => prev.name !== current.name))
     );
-
-    return b$;
 
     const validationNotActive$ = validation$.pipe(
-      tap(x => console.log('runs b')),
       filter(([prev, current]) => prev.name !== current.name),
-      tap(x => console.log('mergenao')),
       map(([prev, current]) => current),
       mergeMap(({ name, value }) => zip(this.runFieldLevelValidation(name, value), of(name)))
     );
