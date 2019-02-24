@@ -14,12 +14,8 @@ import React, { Component } from 'react';
 import propTypes from 'prop-types';
 import setInternalValue from './utils/setInternalValue';
 import retrieveInternalValue from './utils/retrieveInternalValue';
-import { toPath } from 'lodash';
-import isObj from './utils/isObj';
-import isEmptyObj from './utils/isEmptyObj';
-import checkValidValidatorFunc from './utils/checkValidValidatorFunc';
-import combineFielValidationResults from './utils/combineFieldValidationResults';
-import { Observable, merge, of, zip, pipe } from 'rxjs';
+import { toPath, merge as deepmerge } from 'lodash';
+import { Observable, merge, of, zip, pipe, iif } from 'rxjs';
 import {
   distinctUntilChanged,
   filter,
@@ -28,8 +24,19 @@ import {
   throttleTime,
   retry,
   tap,
-  catchError
+  catchError,
+  pairwise,
+  startWith,
+  mergeAll,
+  map,
+  delay,
+  flatMap,
+  partition
 } from 'rxjs/operators';
+import isObj from './utils/isObj';
+import isEmptyObj from './utils/isEmptyObj';
+import checkValidValidatorFunc from './utils/checkValidValidatorFunc';
+import combineFielValidationResults from './utils/combineFieldValidationResults';
 
 export const FormContext = React.createContext();
 
@@ -37,17 +44,13 @@ export default class FormHelper extends Component {
   static propTypes = {
     initialValues: propTypes.object.isRequired,
     onSubmit: propTypes.func.isRequired,
-    validateOnChange: propTypes.bool.isRequired,
-    validateOnBlur: propTypes.bool.isRequired,
-    rootValidatior: propTypes.func.isRequired
+    validate: propTypes.func.isRequired
   };
 
   static defaultProps = {
     initialValues: {},
     onSubmit: () => {},
-    validateOnChange: true,
-    validateOnBlur: true,
-    rootValidatior: () => {}
+    validate: () => {}
   };
 
   fieldValidators = {};
@@ -69,6 +72,90 @@ export default class FormHelper extends Component {
     };
   }
 
+  // FUNCTIONS TO SETUP VALIDATION OBSERVABLES
+
+  initilizeFieldLevelValidation$ = () => {
+    /*
+    const validation$ = Observable.create(observer => {
+      this.triggerFieldLevelValidation = (name, value) => {
+        observer.next({ name, value });
+      };
+    }).pipe(
+      startWith({ name: null }),
+      pairwise(),
+      switchMap(([prev, current]) =>
+        iif(() => prev.name === current.name, of(current).pipe(mergeMap(x => of('3'))), of('false'))
+      )
+    );
+*/
+    const a$ = Observable.create(observer => {
+      this.triggerFieldLevelValidation = (name, value) => {
+        observer.next({ name, value });
+      };
+    }).pipe(
+      startWith({ name: null }),
+      pairwise()
+    );
+
+    const [a, b] = a$.pipe(partition(([prev, current]) => prev.name === current.name));
+
+    return merge(a.pipe(tap(() => console.log('a'))), b.pipe(tap(() => console.log('b'))));
+
+    const validationActive$ = validation$.pipe(
+      throttleTime(300),
+      switchMap(({ name, value }) => zip(this.runFieldLevelValidation(name, value), of(name)))
+    );
+
+    const validationNotActive$ = validation$.pipe(
+      tap(x => console.log('runs b')),
+      filter(([prev, current]) => prev.name !== current.name),
+      tap(x => console.log('mergenao')),
+      map(([prev, current]) => current),
+      mergeMap(({ name, value }) => zip(this.runFieldLevelValidation(name, value), of(name)))
+    );
+
+    return merge(validationNotActive$, validationActive$).pipe(catchError(x => console.log(x)));
+  };
+
+  // \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+
+  componentDidMount() {
+    this.mounted = true;
+
+    const composed$ = this.initilizeFieldLevelValidation$();
+
+    this.valdattionSubscription = composed$.subscribe(x => console.log(x), x => console.log(x));
+
+    //possible move this logic out of cdm
+    /*
+    this.validationSubscription = composed$.subscribe(
+      ([errors, name]) => {
+        this.setState(prevState => ({
+          ...prevState,
+          errors: setInternalValue(prevState.errors, name, errors)
+        }));
+      },
+      a => console.log(a)
+    );
+    */
+  }
+
+  componentWillUnmount() {
+    this.mounted = false;
+    this.validationSubscription.unsubscribe();
+    //cancel validation here too
+  }
+
+  attachFieldValidator = (name, validationFunc) => {
+    this.fieldValidators[name] = { validator: validationFunc, active: false };
+  };
+
+  detachFieldValidator = name => {
+    delete this.fieldValidators[name];
+  };
+
+  // TRIGGERS FOR THE VALIDATION OBSERVABLES  /////////////////////////////////////////
+
   runFieldLevelValidation = (name, value) => {
     this.fieldValidators[name].active = true;
     return new Promise(resolve => resolve(this.fieldValidators[name].validator(value))).then(
@@ -86,66 +173,26 @@ export default class FormHelper extends Component {
       return this.runFieldLevelValidation(key, retrieveInternalValue(this.state.values, key));
     });
 
-    Promise.all(promiseArray)
-      .then(errorsArray => combineFielValidationResults(validatorKeys, errorsArray))
-      .then(c => console.log(c));
+    return Promise.all(promiseArray).then(errorsArray =>
+      combineFielValidationResults(validatorKeys, errorsArray)
+    );
   };
 
-  componentDidMount() {
-    this.mounted = true;
+  runFormLevelValidation = () => {
+    const { validate } = this.props;
+    const { values } = this.state;
 
-    //possible move this logic out of cdm
-    const validation$ = Observable.create(observer => {
-      this.triggerFieldLevelValidation = (name, value) => {
-        observer.next({ name, value });
-      };
-    }).pipe(
-      distinctUntilChanged(
-        (previous, current) => previous.name === current.name && previous.value === current.value
-      )
-    );
-
-    const validationActive$ = validation$.pipe(
-      filter(({ name }) => this.fieldValidators[name].active === true),
-      throttleTime(300),
-      switchMap(({ name, value }) => zip(this.runFieldLevelValidation(name, value), of(name)))
-    );
-
-    const validationNotActive$ = validation$.pipe(
-      filter(({ name }) => this.fieldValidators[name].active !== true),
-      mergeMap(({ name, value }) => zip(this.runFieldLevelValidation(name, value), of(name))),
-      filter(([value, name]) => this.fieldValidators[name].active !== true)
-    );
-
-    const composed$ = merge(validationActive$, validationNotActive$);
-
-    this.validationSubscription = composed$.subscribe(
-      ([errors, name]) => {
-        this.setState(prevState => ({
-          ...prevState,
-          errors: setInternalValue(prevState.errors, name, errors)
-        }));
-      },
-      a => console.log(a)
-    );
-  }
-
-  componentWillUnmount() {
-    this.mounted = false;
-    this.validationSubscription.unsubscribe();
-    //cancel validation here too
-  }
-
-  attachFieldValidator = (name, validationFunc) => {
-    this.fieldValidators[name] = { validator: validationFunc, active: false };
+    return new Promise(res => res(validate(values)));
   };
 
-  detachFieldValidator = name => {
-    delete this.fieldValidators[name];
+  runAllValidators = () => {
+    return Promise.all([this.runAllFielLevelValidations(), this.runFormLevelValidation()]);
   };
+
+  //\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
 
   setTouched = event => {
-    const { name } = event.target;
+    const { name, value } = event.target;
 
     this.setState(
       prevState => ({
@@ -153,8 +200,16 @@ export default class FormHelper extends Component {
         touched: setInternalValue(prevState.touched, name, true)
       }),
       () => {
-        if (checkValidValidatorFunc.call(this, name) && this.props.validateOnBlur) {
-          this.triggerFieldLevelValidation(name, value);
+        if (checkValidValidatorFunc.call(this, name)) {
+          Promise.all([
+            this.runFieldLevelValidation(name, value),
+            this.runFormLevelValidation()
+          ]).then(([fieldError, formErrors]) =>
+            this.setState(prevState => ({
+              ...prevState,
+              errors: deepmerge(setInternalValue(prevState.errors, name, fieldError), formErrors)
+            }))
+          );
         }
       }
     );
@@ -162,14 +217,14 @@ export default class FormHelper extends Component {
 
   handleChange = event => {
     const { name, value, type } = event.target;
-    console.log(name, type, value);
+    //  console.log(name, type, value);
     this.setState(
       prevState => ({
         ...prevState,
         values: setInternalValue(prevState.values, name, value)
       }),
       () => {
-        if (checkValidValidatorFunc.call(this, name) && this.props.validateOnChange) {
+        if (checkValidValidatorFunc.call(this, name)) {
           this.triggerFieldLevelValidation(name, value);
         }
       }
@@ -184,7 +239,7 @@ export default class FormHelper extends Component {
     return (
       <FormContext.Provider value={{ a: 3 }}>
         {children({
-          handleChange: this.runAllFielLevelValidations,
+          handleChange: this.handleChange,
           attachFieldValidator: this.attachFieldValidator
         })}
       </FormContext.Provider>
