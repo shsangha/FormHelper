@@ -31,7 +31,9 @@ import {
   map,
   delay,
   flatMap,
-  partition
+  partition,
+  combineLatest,
+  take
 } from 'rxjs/operators';
 import isObj from './utils/isObj';
 import isEmptyObj from './utils/isEmptyObj';
@@ -94,17 +96,31 @@ export default class FormHelper extends Component {
       };
     }).pipe(
       startWith({ name: null }),
-      pairwise()
+      pairwise(),
+      tap(x => console.log(x))
     );
 
-    const [a, b] = a$.pipe(partition(([prev, current]) => prev.name === current.name));
-
-    return merge(a.pipe(tap(() => console.log('a'))), b.pipe(tap(() => console.log('b'))));
-
-    const validationActive$ = validation$.pipe(
-      throttleTime(300),
-      switchMap(({ name, value }) => zip(this.runFieldLevelValidation(name, value), of(name)))
+    const b$ = a$.pipe(
+      flatMap(([prev, current]) =>
+        iif(
+          () => {
+            console.log(prev, current);
+            return prev.name === current.name;
+          },
+          a$.pipe(
+            tap(() => console.log('first')),
+            throttleTime(300),
+            switchMap(([_, { name, value }]) => this.runFieldLevelValidation(name, value), take(1))
+          ),
+          a$.pipe(
+            tap(() => console.log('bottom')),
+            flatMap(([_, { name, value }]) => this.runFieldLevelValidation(name, value))
+          )
+        )
+      )
     );
+
+    return b$;
 
     const validationNotActive$ = validation$.pipe(
       tap(x => console.log('runs b')),
