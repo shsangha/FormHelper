@@ -15,7 +15,7 @@ import propTypes from 'prop-types';
 import setInternalValue from './utils/setInternalValue';
 import retrieveInternalValue from './utils/retrieveInternalValue';
 import { toPath, merge as deepmerge } from 'lodash';
-import { Observable, merge, of, zip, pipe, iif, forkJoin } from 'rxjs';
+import { Observable, merge, of, zip } from 'rxjs';
 import {
   distinctUntilChanged,
   filter,
@@ -24,22 +24,15 @@ import {
   throttleTime,
   retry,
   tap,
-  catchError,
   pairwise,
   startWith,
-  mergeAll,
   map,
-  delay,
-  flatMap,
-  partition,
-  combineLatest,
-  take,
   share
 } from 'rxjs/operators';
 import isObj from './utils/isObj';
 import isEmptyObj from './utils/isEmptyObj';
 import checkValidValidatorFunc from './utils/checkValidValidatorFunc';
-import combineFielValidationResults from './utils/combineFieldValidationResults';
+import flatCombineFieldValidators from './utils/flatCombineFieldValidators';
 
 export const FormContext = React.createContext();
 
@@ -69,30 +62,19 @@ export default class FormHelper extends Component {
         free: ''
       },
       touched: {},
-      errors: {},
+      errors: {
+        gon: ''
+      },
       isValidating: false,
       isSubmitting: false
     };
   }
 
-  // FUNCTIONS TO SETUP VALIDATION OBSERVABLES
+  // FUNCTIONS TO SETUP VALIDATION OBSERVABLES //////////////////////////
 
-  initilizeFieldLevelValidation$ = () => {
-    /*
+  initializeOnFieldChange$ = () => {
     const validation$ = Observable.create(observer => {
-      this.triggerFieldLevelValidation = (name, value) => {
-        observer.next({ name, value });
-      };
-    }).pipe(
-      startWith({ name: null }),
-      pairwise(),
-      switchMap(([prev, current]) =>
-        iif(() => prev.name === current.name, of(current).pipe(mergeMap(x => of('3'))), of('false'))
-      )
-    );
-*/
-    const validation$ = Observable.create(observer => {
-      this.triggerFieldLevelValidation = (name, value) => {
+      this.triggerFieldChange$ = (name, value) => {
         observer.next({ name, value });
       };
     }).pipe(
@@ -101,18 +83,61 @@ export default class FormHelper extends Component {
       share()
     );
 
-    const result = merge(
-      validation$.pipe(filter(([prev, current]) => prev.name === current.name)),
-      validation$.pipe(filter(([prev, current]) => prev.name !== current.name))
+    return merge(
+      validation$.pipe(
+        filter(([prev, current]) => prev.name === current.name),
+        throttleTime(300),
+        switchMap(([_, { name, value }]) =>
+          zip(this.runFieldLevelValidation(name, value), of(name))
+        )
+      ),
+      validation$.pipe(
+        filter(([prev, current]) => prev.name !== current.name),
+        mergeMap(([_, { name, value }]) => zip(this.runFieldLevelValidation(name, value), of(name)))
+      )
+    ).pipe(
+      // would consider doing a distinctUntilChanged here if the error hasnt't changed to prevent calling setState
+      // but think it would probably be faster to re-render than it would do do a deep obj compare every time
+      retry(3)
+      //possible merge the state with setInternalValue here so we can merge all three streams later
     );
+  };
 
-    const validationNotActive$ = validation$.pipe(
-      filter(([prev, current]) => prev.name !== current.name),
-      map(([prev, current]) => current),
-      mergeMap(({ name, value }) => zip(this.runFieldLevelValidation(name, value), of(name)))
+  initializeOnFieldBlurValidation$ = () =>
+    Observable.create(observer => {
+      this.triggerFieldBlur$ = (name, value) => {
+        observer.next({ name, value });
+      };
+    })
+      .pipe(
+        distinctUntilChanged(
+          (prev, current) => prev.name === current.name && prev.value === current.value
+        )
+      )
+      .pipe(
+        mergeMap(({ name, value }) =>
+          zip(
+            zip(this.runFieldLevelValidation(name, value), of(name)),
+            this.runFormLevelValidation()
+          )
+        ),
+        map(([[fieldError, name], rootErrors]) =>
+          deepmerge({ ...this.state.errors, [name]: fieldError }, rootErrors)
+        )
+      );
+
+  initializeSubmissionValidation = () => {
+    return Observable.create(observer => {
+      this.triggerSubmission$ = () => {
+        observer.next();
+      };
+    }).pipe(
+      tap(() => this.setState({ isValidating: true })),
+      switchMap(() =>
+        Promise.all([this.runAllFielLevelValidations(), this.runFormLevelValidation()])
+      ),
+      tap(() => this.setState({ isValidating: false }))
     );
-
-    return merge(validationNotActive$, validationActive$).pipe(catchError(x => console.log(x)));
   };
 
   // \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
@@ -120,7 +145,9 @@ export default class FormHelper extends Component {
   componentDidMount() {
     this.mounted = true;
 
-    const composed$ = this.initilizeFieldLevelValidation$();
+    // const composed$ = this.initializeOnFieldChange$();
+
+    const composed$ = this.initializeOnFieldBlurValidation$();
 
     this.valdattionSubscription = composed$.subscribe(x => console.log(x), x => console.log(x));
 
@@ -155,12 +182,8 @@ export default class FormHelper extends Component {
   // TRIGGERS FOR THE VALIDATION OBSERVABLES  /////////////////////////////////////////
 
   runFieldLevelValidation = (name, value) => {
-    this.fieldValidators[name].active = true;
     return new Promise(resolve => resolve(this.fieldValidators[name].validator(value))).then(
-      errors => {
-        this.fieldValidators[name].active = false;
-        return errors;
-      }
+      result => (isEmptyObj(result) ? null : result)
     );
   };
 
@@ -172,7 +195,7 @@ export default class FormHelper extends Component {
     });
 
     return Promise.all(promiseArray).then(errorsArray =>
-      combineFielValidationResults(validatorKeys, errorsArray)
+      flatCombineFieldValidators(validatorKeys, errorsArray)
     );
   };
 
@@ -191,26 +214,12 @@ export default class FormHelper extends Component {
 
   setTouched = event => {
     const { name, value } = event.target;
+  };
 
-    this.setState(
-      prevState => ({
-        ...prevState,
-        touched: setInternalValue(prevState.touched, name, true)
-      }),
-      () => {
-        if (checkValidValidatorFunc.call(this, name)) {
-          Promise.all([
-            this.runFieldLevelValidation(name, value),
-            this.runFormLevelValidation()
-          ]).then(([fieldError, formErrors]) =>
-            this.setState(prevState => ({
-              ...prevState,
-              errors: deepmerge(setInternalValue(prevState.errors, name, fieldError), formErrors)
-            }))
-          );
-        }
-      }
-    );
+  setAllTouched = () => {
+    const validatorKeys = Object.keys(this.fieldValidators);
+
+    validatorKeys.map();
   };
 
   handleChange = event => {
@@ -223,7 +232,7 @@ export default class FormHelper extends Component {
       }),
       () => {
         if (checkValidValidatorFunc.call(this, name)) {
-          this.triggerFieldLevelValidation(name, value);
+          this.triggerFieldBlur$(name, value);
         }
       }
     );
@@ -231,13 +240,17 @@ export default class FormHelper extends Component {
 
   getStateAndHelpers = () => {};
 
+  fake = () => {
+    console.log(setAllTouched(['a', 'v', 'a.c', 'a.c[1]']));
+  };
+
   render() {
     const { children } = this.props;
 
     return (
       <FormContext.Provider value={{ a: 3 }}>
         {children({
-          handleChange: this.handleChange,
+          handleChange: this.fake,
           attachFieldValidator: this.attachFieldValidator
         })}
       </FormContext.Provider>
