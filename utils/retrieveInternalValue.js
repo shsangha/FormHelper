@@ -1,3 +1,3 @@
-import { toPath, pick } from 'lodash';
+import { toPath, get } from 'lodash';
 
-export default (object, name) => pick(object, toPath(name));
+export default (object, name) => get(object, toPath(name), undefined);
