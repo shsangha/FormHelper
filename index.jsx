@@ -14,7 +14,7 @@ import React, { Component } from 'react';
 import propTypes from 'prop-types';
 import setInternalValue from './utils/setInternalValue';
 import retrieveInternalValue from './utils/retrieveInternalValue';
-import { toPath, merge as deepmerge } from 'lodash';
+import { merge as deepmerge } from 'lodash';
 import { Observable, merge, of, zip } from 'rxjs';
 import {
   distinctUntilChanged,
@@ -27,9 +27,10 @@ import {
   pairwise,
   startWith,
   map,
-  share
+  share,
+  takeUntil,
+  catchError
 } from 'rxjs/operators';
-import isObj from './utils/isObj';
 import isEmptyObj from './utils/isEmptyObj';
 import checkValidValidatorFunc from './utils/checkValidValidatorFunc';
 import flatCombineFieldValidators from './utils/flatCombineFieldValidators';
@@ -66,14 +67,20 @@ export default class FormHelper extends Component {
         gon: ''
       },
       isValidating: false,
-      isSubmitting: false
+      isSubmitting: false,
+      formErrors: []
     };
   }
 
   // FUNCTIONS TO SETUP VALIDATION OBSERVABLES //////////////////////////
 
-  initializeOnFieldChange$ = () => {
-    const validation$ = Observable.create(observer => {
+  /* @returns -{Observable} 
+     creates an observable that is triggered any time a field with validation is set to validate on change
+     pairwise is so we can conditionally switch/merge map over the last result so that we call setState less 
+     than absolutely neccessary 
+  */
+  createOnChange$ = () =>
+    Observable.create(observer => {
       this.triggerFieldChange$ = (name, value) => {
         observer.next({ name, value });
       };
@@ -83,73 +90,95 @@ export default class FormHelper extends Component {
       share()
     );
 
+  /* @input {Observable} onChange$ - the observable that emits when a field with validation validates on change
+     @input {Observable} onBlur$ - observable that is triggered when a validated fields blurs 
+     @output {Object} - the merged errors from the field being validated and the current error state
+  */
+  manageOnChange$ = (onChange$, onBlur$) => {
     return merge(
-      validation$.pipe(
+      onChange$.pipe(
+        tap(x => console.log(x)),
+
         filter(([prev, current]) => prev.name === current.name),
         throttleTime(300),
         switchMap(([_, { name, value }]) =>
-          zip(this.runFieldLevelValidation(name, value), of(name))
+          zip(this.runFieldLevelValidation(name, value), of(name)).pipe(takeUntil(onBlur$))
         )
       ),
-      validation$.pipe(
+      onChange$.pipe(
+        tap(x => console.log(x)),
         filter(([prev, current]) => prev.name !== current.name),
-        mergeMap(([_, { name, value }]) => zip(this.runFieldLevelValidation(name, value), of(name)))
+        tap(() => console.log('rins')),
+        mergeMap(([_, { name, value }]) =>
+          zip(this.runFieldLevelValidation(name, value), of(name)).pipe(takeUntil(onBlur$))
+        )
       )
     ).pipe(
-      // would consider doing a distinctUntilChanged here if the error hasnt't changed to prevent calling setState
-      // but think it would probably be faster to re-render than it would do do a deep obj compare every time
-      retry(3)
-      //possible merge the state with setInternalValue here so we can merge all three streams later
+      tap(val => console.log(val, 'val')),
+      retry(3),
+      catchError(error => {
+        this.setState({
+          formErrors: [...this.state.formErrors, error.message]
+        });
+        console.log(error);
+        return of(this.state.errors);
+      })
     );
+    // would consider doing a distinctUntilChanged here if the error hasnt't changed to prevent calling setState
+    // but think it would probably be faster to re-render than it would do do a deep obj compare every time
+    //retry(3)
+    //possible merge the state with setInternalValue here so we can merge all three streams later
   };
 
-  initializeOnFieldBlurValidation$ = () =>
+  createOnBlur$ = () =>
     Observable.create(observer => {
       this.triggerFieldBlur$ = (name, value) => {
         observer.next({ name, value });
       };
-    })
-      .pipe(
-        distinctUntilChanged(
-          (prev, current) => prev.name === current.name && prev.value === current.value
-        )
-      )
-      .pipe(
-        mergeMap(({ name, value }) =>
-          zip(
-            zip(this.runFieldLevelValidation(name, value), of(name)),
-            this.runFormLevelValidation()
-          )
-        ),
-        map(([[fieldError, name], rootErrors]) =>
-          deepmerge({ ...this.state.errors, [name]: fieldError }, rootErrors)
-        )
-      );
+    }).pipe(share());
 
-  initializeSubmissionValidation = () => {
-    return Observable.create(observer => {
+  mangageOnBlur$ = (onBlur$, onSubmit$) =>
+    onBlur$.pipe(
+      mergeMap(({ name, value }) =>
+        zip(
+          zip(this.runFieldLevelValidation(name, value), of(name)),
+          this.runFormLevelValidation()
+        ).pipe(takeUntil(onSubmit$))
+      ),
+      map(([[fieldError, name], rootErrors]) =>
+        deepmerge({ ...this.state.errors, [name]: fieldError }, rootErrors)
+      )
+    );
+
+  createOnSubmit$ = () =>
+    Observable.create(observer => {
       this.triggerSubmission$ = () => {
         observer.next();
       };
-    }).pipe(
+    }).pipe(share());
+
+  manageOnSubmit$ = onSubmit$ =>
+    onSubmit$.pipe(
       tap(() => this.setState({ isValidating: true })),
       switchMap(() =>
         Promise.all([this.runAllFielLevelValidations(), this.runFormLevelValidation()])
       ),
       tap(() => this.setState({ isValidating: false }))
     );
-  };
 
   // \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
 
   componentDidMount() {
-    this.mounted = true;
+    const changeValidation$ = this.createOnChange$();
+    const blurValidation$ = this.createOnBlur$();
+    const submitValidation$ = this.createOnSubmit$();
 
-    // const composed$ = this.initializeOnFieldChange$();
-
-    const composed$ = this.initializeOnFieldBlurValidation$();
-
-    this.valdattionSubscription = composed$.subscribe(x => console.log(x), x => console.log(x));
+    this.changeStreamSubscription = this.manageOnChange$(
+      changeValidation$,
+      blurValidation$
+    ).subscribe(x => console.log(x));
+    this.blurStreamSubscription = this.mangageOnBlur$(blurValidation$, submitValidation$);
+    this.submitStreamSubscription = this.manageOnSubmit$(submitValidation$);
 
     //possible move this logic out of cdm
     /*
@@ -232,17 +261,19 @@ export default class FormHelper extends Component {
       }),
       () => {
         if (checkValidValidatorFunc.call(this, name)) {
-          this.triggerFieldBlur$(name, value);
+          this.triggerFieldChange$(name, value);
         }
       }
     );
   };
 
-  getStateAndHelpers = () => {};
-
-  fake = () => {
-    console.log(setAllTouched(['a', 'v', 'a.c', 'a.c[1]']));
+  handleBlur = event => {
+    const { name, value, type } = event.target;
+    console.log('blurred');
+    this.triggerFieldBlur$(name, value);
   };
+
+  getStateAndHelpers = () => {};
 
   render() {
     const { children } = this.props;
@@ -250,7 +281,8 @@ export default class FormHelper extends Component {
     return (
       <FormContext.Provider value={{ a: 3 }}>
         {children({
-          handleChange: this.fake,
+          handleChange: this.handleChange,
+          handleBlur: this.handleBlur,
           attachFieldValidator: this.attachFieldValidator
         })}
       </FormContext.Provider>
