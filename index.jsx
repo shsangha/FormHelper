@@ -63,9 +63,7 @@ export default class FormHelper extends Component {
         free: ''
       },
       touched: {},
-      errors: {
-        gon: ''
-      },
+      errors: {},
       isValidating: false,
       isSubmitting: false,
       formErrors: []
@@ -97,8 +95,6 @@ export default class FormHelper extends Component {
   manageOnChange$ = (onChange$, onBlur$) => {
     return merge(
       onChange$.pipe(
-        tap(x => console.log(x)),
-
         filter(([prev, current]) => prev.name === current.name),
         throttleTime(300),
         switchMap(([_, { name, value }]) =>
@@ -106,28 +102,21 @@ export default class FormHelper extends Component {
         )
       ),
       onChange$.pipe(
-        tap(x => console.log(x)),
         filter(([prev, current]) => prev.name !== current.name),
-        tap(() => console.log('rins')),
         mergeMap(([_, { name, value }]) =>
           zip(this.runFieldLevelValidation(name, value), of(name)).pipe(takeUntil(onBlur$))
         )
       )
     ).pipe(
-      tap(val => console.log(val, 'val')),
-      retry(3),
+      map(([error, name]) => setInternalValue(this.state.errors, name, error)),
       catchError(error => {
-        this.setState({
-          formErrors: [...this.state.formErrors, error.message]
-        });
         console.log(error);
+        this.setFormLevelError(error.message);
         return of(this.state.errors);
       })
     );
     // would consider doing a distinctUntilChanged here if the error hasnt't changed to prevent calling setState
     // but think it would probably be faster to re-render than it would do do a deep obj compare every time
-    //retry(3)
-    //possible merge the state with setInternalValue here so we can merge all three streams later
   };
 
   createOnBlur$ = () =>
@@ -249,6 +238,12 @@ export default class FormHelper extends Component {
     const validatorKeys = Object.keys(this.fieldValidators);
 
     validatorKeys.map();
+  };
+
+  setFormLevelError = error => {
+    this.setState({
+      formErrors: [...this.state.formErrors, error]
+    });
   };
 
   handleChange = event => {
