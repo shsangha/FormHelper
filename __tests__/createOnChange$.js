@@ -2,11 +2,17 @@
 /* eslint-disable no-undef */
 import React from 'react';
 import { shallow } from 'enzyme';
+import { merge } from 'rxjs';
+import { take } from 'rxjs/operators';
 import FormHelper from '../index';
 
 describe('tests that the observable for field level validaition is created as expected', () => {
   const wrapper = shallow(<FormHelper>{() => {}}</FormHelper>);
   const instance = wrapper.instance();
+
+  beforeEach(() => {
+    jest.resetAllMocks();
+  });
 
   test('make sure that the function returns an observable', () => {
     const onChangeObservable = instance.createOnChange$();
@@ -48,33 +54,62 @@ describe('tests that the observable for field level validaition is created as ex
     });
   });
 
-  test('makes sure that observable emits pairwise so we can filter properly', () => {
-    const onChange$ = instance.createOnChange$().subscribe(([prev, current]) => {
-      expect(prev.name).toBeNull();
-      expect(current.name).toEqual('fakeName');
-      expect(current.value).toEqual('fakeValue');
-    });
+  test('makes sure that observable emits pairwise so we can filter properly', done => {
+    instance
+      .createOnChange$()
+      .pipe(take(1))
+      .subscribe({
+        next([prev, current]) {
+          try {
+            expect(prev.name).toBeNull();
+            expect(current.name).toEqual('fakeName');
+            expect(current.value).toEqual('fakeValue');
+          } catch (error) {
+            done.fail(error);
+          }
+        },
+        complete() {
+          done();
+        }
+      });
     instance.triggerFieldChange$('fakeName', 'fakeValue');
-    onChange$.unsubscribe();
   });
 
-  test('makes sure that the observable is multi-cast so we can subscribe to the inner observable twice in merge func later', () => {
-    const onChange$ = instance.createOnChange$();
+  test('makes sure that the observable is multi-cast so we can subscribe to the inner observable twice in merge func later', done => {
+    const onChange$ = instance.createOnChange$().pipe(take(1));
 
-    const sub1 = onChange$.subscribe(([prev, current]) => {
-      expect(prev.name).toBeNull();
-      expect(current.name).toEqual('fakeName');
-      expect(current.value).toEqual('fakeValue');
-    });
-    const sub2 = onChange$.subscribe(([prev, current]) => {
-      expect(prev.name).toBeNull();
-      expect(current.name).toEqual('fakeName');
-      expect(current.value).toEqual('fakeValue');
+    const sub1 = onChange$;
+    const sub2 = onChange$;
+
+    const nextCalledSpy = jest.fn();
+
+    merge(sub1, sub2).subscribe({
+      next([prev, current]) {
+        try {
+          expect(prev.name).toBeNull();
+          nextCalledSpy(current);
+        } catch (error) {
+          done.fail(error);
+        }
+      },
+      complete() {
+        try {
+          expect(nextCalledSpy).toHaveBeenCalledTimes(2);
+          expect(nextCalledSpy).toHaveBeenNthCalledWith(1, {
+            name: 'fakeName',
+            value: 'fakeValue'
+          });
+          expect(nextCalledSpy).toHaveBeenNthCalledWith(2, {
+            name: 'fakeName',
+            value: 'fakeValue'
+          });
+          done();
+        } catch (error) {
+          done.fail(error);
+        }
+      }
     });
 
     instance.triggerFieldChange$('fakeName', 'fakeValue');
-
-    sub1.unsubscribe();
-    sub2.unsubscribe();
   });
 });
