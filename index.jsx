@@ -381,9 +381,11 @@ export default class FormHelper extends Component {
      @returns null
   */
   removeFormLevelError = index => {
-    this.setState(prevState => ({
-      formErrors: [...prevState.formErrors].slice(index, 1)
-    }));
+    this.setState(prevState => {
+      const temp = [...prevState.formErrors];
+      temp.splice(index, 1);
+      return temp;
+    });
   };
 
   /* Removes a field  from formState, can be used to remove from an array-field, or when dynamic fields are removed
