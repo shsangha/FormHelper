@@ -301,9 +301,13 @@ export default class FormHelper extends Component {
       return this.runFieldLevelValidation(key, retrieveInternalValue(this.state.values, key));
     });
 
-    return Promise.all(promiseArray)
-      .then(filteredErrors => flatCombineFieldValidators(validatorKeys, filteredErrors))
-      .then(errorsArray => errorsArray.filter(error => error));
+    return Promise.all(promiseArray).then(filteredErrors =>
+      flatCombineFieldValidators(validatorKeys, filteredErrors)
+    );
+    //   .then(errorsArray => {
+    //     console.log(errorsArray);
+    //     errorsArray.filter(error => error);
+    //   });
   };
 
   /* Runs the root level validator and returns a promise that resolves to the new root level error state
