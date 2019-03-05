@@ -34,6 +34,7 @@ import setInternalValue from './utils/setInternalValue';
 import retrieveInternalValue from './utils/retrieveInternalValue';
 import removeInternalValue from './utils/removeInternalValue';
 import flatSetTouched from './utils/flatSetTouched';
+import removeFlatField from './utils/removeFlatField';
 import flatCombineFieldValidators from './utils/flatCombineFieldValidators';
 
 export const FormContext = React.createContext();
@@ -393,15 +394,13 @@ export default class FormHelper extends Component {
      @returns null
   */
   removeField = name => {
-    this.setState({
-      values: removeInternalValue(this.state.values, name),
-      errors: this.state.errors[name]
-        ? removeInternalValue(this.state.errors, name)
-        : this.state.errors,
-      touched: this.state.touched[name]
-        ? removeInternalValue(this.state.touched, name)
-        : this.state.touched
-    });
+    this.setState(prevState => ({
+      values: removeInternalValue(prevState.values, name),
+      errors: prevState.errors[name] ? removeFlatField(prevState.errors, name) : prevState.errors,
+      touched: prevState.touched[name]
+        ? removeFlatField(prevState.touched, name)
+        : prevState.touched
+    }));
   };
 
   /* Resets formState back to its defautls 
