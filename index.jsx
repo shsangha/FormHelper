@@ -422,9 +422,9 @@ export default class FormHelper extends Component {
      @returns null
   */
   addField = (name, initialValue) => {
-    this.setState({
-      values: { ...values, [name]: initialValue }
-    });
+    this.setState(prevState => ({
+      values: setInternalValue(prevState.values, name, initialValue)
+    }));
   };
 
   /* Default implementation of handle-change can be overridden with the getInputProps helper in Field components,
