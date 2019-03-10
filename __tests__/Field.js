@@ -1,11 +1,15 @@
 /* eslint-disable react/jsx-filename-extension */
 /* eslint-disable no-undef */
 import React from 'react';
-import { mount } from 'enzyme';
+import { mount, shallow } from 'enzyme';
 import FormHelper from '../index';
 import Field from '../Field';
 
 describe('tests the Field Component', () => {
+  beforeEach(() => {
+    jest.restoreAllMocks();
+  });
+
   test('can override default implementations of on change/blur if needed', () => {
     const fakeFieldOnChange = jest.fn();
 
@@ -41,21 +45,39 @@ describe('tests the Field Component', () => {
     wrapper.unmount();
   });
 
-  test('passes through the specfic error and touched state relevant to the field', () => {
-    const wrapper = mount(
-      <FormHelper>
-        {() => (
-          <Field name="test">
-            {({ field, inputHandlers }) => (
-              <input id="test-input" {...field} {...inputHandlers()} />
-            )}
-          </Field>
-        )}
-      </FormHelper>
+  test.only('Passes the expected info in to the render prop', () => {
+    const fakeChildren = jest.fn(() => {});
+
+    const initialValue = { test: 'any value' };
+
+    const wrapper = shallow(
+      <FormHelper initialValues={initialValue}>{args => fakeChildren(args)}</FormHelper>
     );
+
+    const fakeState = {
+      errors: {
+        someKey: {
+          someError: 'any'
+        },
+        touched: {
+          someKey: true
+        }
+      }
+    };
+
+    wrapper.setState(fakeState, () => {
+      expect(fakeChildren).toHaveBeenCalledTimes(2);
+      expect(fakeChildren).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          values: { ...initialValue },
+          ...fakeState
+        })
+      );
+    });
   });
 
-  test.only('passes the correct props into the Field', () => {
+  test('passes the correct props into the input', () => {
     const wrapper = mount(
       <FormHelper initialValues={{ test: 'any value' }}>
         {() => (
