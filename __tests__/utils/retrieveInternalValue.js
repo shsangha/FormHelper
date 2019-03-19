@@ -2,6 +2,27 @@
 import retrieveInternalValue from '../../utils/retrieveInternalValue';
 
 describe('picks off nested properties of object', () => {
+  test('works on complex nested objects', () => {
+    const dummyObj = {
+      first: {
+        second: {
+          third: {
+            array: [{}, { some: true }, {}],
+            object: {
+              array: [1, 2, 3]
+            }
+          }
+        }
+      }
+    };
+
+    const result = retrieveInternalValue(dummyObj, 'first.second.third.array[1]');
+    const secondResult = retrieveInternalValue(dummyObj, 'first.second.third.object.array[1]');
+
+    expect(result).toMatchObject({ some: true });
+    expect(secondResult).toEqual(2);
+  });
+
   test('return the nested object if it exists', () => {
     const dummyObj = {
       key: {
