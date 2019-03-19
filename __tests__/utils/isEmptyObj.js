@@ -13,4 +13,10 @@ describe('tests is a given object is empty', () => {
 
     expect(isEmptyObj(dummyObj)).toEqual(false);
   });
+
+  test('returns false if what we passed in was not an object', () => {
+    const dummyObj = 'not an object';
+
+    expect(isEmptyObj(dummyObj)).toEqual(false);
+  });
 });
