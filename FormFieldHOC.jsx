@@ -1,8 +1,13 @@
 import React from 'react';
 import propTypes from 'prop-types';
+import { toPath } from 'lodash';
 import { FormContext } from './index';
 import pipe from './utils/pipe';
 import isEmptyObj from './utils/isEmptyObj';
+import set from './utils/set';
+import retrieveInternalValue from './utils/retrieveInternalValue';
+
+const { setInternalError } = set;
 
 export default (Component, multiField) =>
   class FormFieldHoc extends React.Component {
@@ -28,10 +33,10 @@ export default (Component, multiField) =>
         err => (isEmptyObj(err) ? null : err),
         filterdError =>
           filterdError
-            ? setInternvalError(
+            ? setInternalError(
                 retrieveInternalValue(this.context.errors, name) || {},
                 toPath(name).slice(-1),
-                err
+                filterdError
               )
             : {}
       );
@@ -42,12 +47,13 @@ export default (Component, multiField) =>
       if (validator) {
         this.context.attachFieldValidator(
           name,
-          multiField ? pipeMultiFieldValidation(validator, name) : validator,
+          multiField ? this.pipeMultiFieldValidation(validator, name) : validator,
           validateOnChange,
           validateOnBlur
         );
       }
     }
+
     componentWillUnmount() {
       const { dynamic, name } = this.props;
       const { detachFieldValidator, cleanUpField } = this.context;
@@ -60,8 +66,6 @@ export default (Component, multiField) =>
     render() {
       const { retrieveInternalValue, values, errors, touched } = this.context;
       const { name } = this.props;
-
-      console.log(values, name, 'VALUES');
 
       const FieldState = {
         value: retrieveInternalValue(values, name),
