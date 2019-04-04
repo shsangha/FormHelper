@@ -1,8 +1,8 @@
 /* eslint-disable no-param-reassign */
 /* eslint-disable no-multi-assign */
-import { toPath, cloneDeep } from 'lodash';
-
-export default (rootObject, fieldName) => {
+import { toPath, cloneDeep } from "lodash";
+import { IndexSignatureObject } from "../types";
+export default (rootObject: object, fieldName: string) => {
   // need to do this so we don't actually mutate the state object
 
   const copy = cloneDeep(rootObject);
@@ -10,7 +10,7 @@ export default (rootObject, fieldName) => {
   const fieldArray = toPath(fieldName);
 
   const { target, index } = fieldArray.reduce(
-    (resVal, nextKey, idx) => {
+    (resVal: IndexSignatureObject, nextKey, idx) => {
       if (idx < fieldArray.length - 1) {
         if (resVal.target[nextKey]) {
           resVal.target = resVal.target[nextKey];
@@ -22,11 +22,9 @@ export default (rootObject, fieldName) => {
     { target: copy, index: null }
   );
 
-  //
-
   // if the path is an array splice instead of delete
   if (fieldArray[index].match(/^[0-9]+$/) != null && Array.isArray(target)) {
-    console.log(target[fieldArray[index]]);
+    target.splice(+fieldArray[index], 1);
   } else {
     delete target[fieldArray[index]];
   }

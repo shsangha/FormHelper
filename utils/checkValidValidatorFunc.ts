@@ -1,4 +1,6 @@
-export default function(name) {
+export default function(name:string) {
+  this: any
+  
   return (
     (this.fieldValidators[name] &&
       this.fieldValidators[name].validator &&
