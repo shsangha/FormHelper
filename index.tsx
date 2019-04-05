@@ -8,7 +8,7 @@ import {
   StateChange
 } from "./types";
 import { merge as deepmerge } from "lodash";
-import { Observable, merge, of, zip, Observer } from "rxjs";
+import { Observable, merge, of, zip, Observer, Subscription } from "rxjs";
 import {
   filter,
   switchMap,
@@ -28,7 +28,7 @@ import removeInternalValue from "./utils/removeInternalValue";
 import combineFieldValidationResults from "./utils/combineFieldValidationResults";
 import retrieveInternalValue from "./utils/retrieveInternalValue";
 
-export const FormContext = React.createContext<FormHelperContext>({});
+export const FormContext = React.createContext({} as FormHelperContext);
 
 export default class FormHelper extends Component<
   FormHelperProps,
@@ -43,9 +43,21 @@ export default class FormHelper extends Component<
   };
 
   private fieldValidators: IndexSignatureObject = {};
-  private triggerFieldChange$?: (name: string, value: any) => void;
-  private triggerFieldBlur$?: (name: string, value: any) => void;
-  private triggerSubmission$?: () => void;
+  private triggerFieldChange$: (
+    event: React.ChangeEvent<HTMLInputElement>
+  ) => void = () => {
+    return;
+  };
+  private triggerFieldBlur$: (
+    event: React.FocusEvent<HTMLInputElement>
+  ) => void = () => {
+    return;
+  };
+  private triggerSubmission$: () => void = () => {
+    return;
+  };
+  private validationSubscription?: Subscription;
+  private submissionSubscription?: Subscription;
 
   constructor(props: FormHelperProps) {
     super(props);
@@ -63,8 +75,13 @@ export default class FormHelper extends Component<
 
   private createOnChange$ = (): Observable<any> =>
     Observable.create((observer: Observer<any>) => {
-      this.triggerFieldChange$ = (name: string, value: object) => {
-        observer.next({ name, value });
+      this.triggerFieldChange$ = (
+        event: React.ChangeEvent<HTMLInputElement>
+      ) => {
+        const { name, value } = event.target;
+        if (name && value) {
+          observer.next({ name, value });
+        }
       };
     }).pipe(
       startWith({ name: null }),
@@ -74,8 +91,11 @@ export default class FormHelper extends Component<
 
   private createOnBlur$ = (): Observable<any> =>
     Observable.create((observer: Observer<any>) => {
-      this.triggerFieldBlur$ = (name: string, value: object) => {
-        observer.next({ name, value });
+      this.triggerFieldBlur$ = (event: React.FocusEvent<HTMLInputElement>) => {
+        const { name, value } = event.target;
+        if (name && value) {
+          observer.next({ name, value });
+        }
       };
     }).pipe(share());
 
@@ -169,7 +189,28 @@ export default class FormHelper extends Component<
       )
     );
 
-  public componentDidMount() {}
+  public componentDidMount() {
+    const changeValidation$ = this.createOnChange$();
+    const blurValidation$ = this.createOnBlur$();
+    const submitValidation$ = this.createOnSubmit$();
+
+    this.validationSubscription = merge(
+      this.manageOnChange$(changeValidation$, blurValidation$),
+      this.manageOnBlur$(blurValidation$, submitValidation$)
+    ).subscribe(validationResults => {
+      this.setState({ errors: validationResults });
+    });
+
+    this.submissionSubscription = this.manageOnSubmit$(
+      submitValidation$
+    ).subscribe(errors => {
+      if (isEmptyObj(errors)) {
+        this.props.onSubmit(this.state.values);
+      } else {
+        this.setState({ errors });
+      }
+    });
+  }
   public componentWillUnmount() {}
 
   public attachFieldValidator = (
@@ -253,10 +294,8 @@ export default class FormHelper extends Component<
   };
 
   public handleSubmit = () => {
-    const { errors, values } = this.state;
-
-    if (isEmptyObj(errors)) {
-      this.props.onSubmit(values);
+    if (this.triggerSubmission$) {
+      this.triggerSubmission$();
     }
   };
 
@@ -277,7 +316,7 @@ export default class FormHelper extends Component<
   };
 
   public removeField = (name: string) => {
-    this.setFormState((prevState: FormHelperState) => ({
+    this.setState((prevState: FormHelperState) => ({
       values: removeInternalValue(prevState.values, name),
       errors: removeInternalValue(prevState.errors, name),
       touched: removeInternalValue(prevState.touched, name)
@@ -299,11 +338,15 @@ export default class FormHelper extends Component<
     }
   };
 
-  public setFormState = (stateChange: StateChange) => {
+  public setFormState = (name: string) => (stateChange: StateChange) => {
     const changes: object =
-      typeof stateChange === "function" ? stateChange(this.state) : stateChange;
+      typeof stateChange === "function"
+        ? stateChange(retrieveInternalValue(this.state.values, name))
+        : stateChange;
 
-    this.setState({ ...changes });
+    this.setState(prevState => ({
+      values: setInternalValue(prevState.values, name, changes)
+    }));
   };
 
   public getStateAndHelpers = () => {
@@ -318,7 +361,10 @@ export default class FormHelper extends Component<
       handleChange,
       handleSubmit,
       state,
-      resetForm
+      resetForm,
+      triggerFieldChange$,
+      triggerFieldBlur$,
+      triggerSubmission$
     } = this;
 
     return {
@@ -332,7 +378,10 @@ export default class FormHelper extends Component<
       handleChange,
       handleSubmit,
       ...state,
-      resetForm
+      resetForm,
+      triggerFieldChange$,
+      triggerFieldBlur$,
+      triggerSubmission$
     };
   };
   public render() {
